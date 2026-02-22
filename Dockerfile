@@ -4,13 +4,13 @@ RUN git clone https://github.com/jacobalberty/permset.git /src && \
     mkdir -p /out && \
     go build -ldflags "-X main.chownDir=/unifi" -o /out/permset
 
-FROM ubuntu:20.04
+FROM ubuntu:24.04
 
 LABEL maintainer="Jacob Alberty <jacob.alberty@foundigital.com>"
 
 ARG DEBIAN_FRONTEND=noninteractive
 
-ARG PKGURL=https://dl.ui.com/unifi/9.4.19-0f76duk082/unifi_sysvinit_all.deb
+ARG PKGURL=https://dl.ui.com/unifi/10.1.85-n38ayo5w94/unifi_sysvinit_all.deb
 
 ENV BASEDIR=/usr/lib/unifi \
     DATADIR=/unifi/data \
@@ -53,6 +53,18 @@ RUN chmod +x /usr/local/bin/docker-entrypoint.sh \
  && chmod +x /usr/local/bin/docker-healthcheck.sh \
  && chmod +x /usr/local/bin/docker-build.sh \
  && chmod -R +x /usr/local/docker/pre_build
+
+RUN apt-get update && \
+    apt-get install -y wget && \
+    wget http://archive.ubuntu.com/ubuntu/pool/main/o/openssl/libssl1.1_1.1.1f-1ubuntu2_amd64.deb && \
+    dpkg -i libssl1.1_1.1.1f-1ubuntu2_amd64.deb && \
+    rm libssl1.1_1.1.1f-1ubuntu2_amd64.deb && \
+    apt-get install -y gnupg ca-certificates curl && \
+    curl -fsSL https://pgp.mongodb.com/server-4.4.asc | gpg --dearmor -o /usr/share/keyrings/mongodb-server-4.4.gpg && \
+    echo "deb [ arch=amd64 signed-by=/usr/share/keyrings/mongodb-server-4.4.gpg ] https://repo.mongodb.org/apt/ubuntu focal/mongodb-org/4.4 multiverse" | tee /etc/apt/sources.list.d/mongodb-org-4.4.list && \
+    apt-get update && \
+    apt-get install -y mongodb-org-server=4.4.30 && \
+    apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # Push installing openjdk-8-jre first, so that the unifi package doesn't pull in openjdk-7-jre as a dependency? Else uncomment and just go with openjdk-7.
 RUN set -ex \
