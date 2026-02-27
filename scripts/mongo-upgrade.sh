@@ -17,28 +17,55 @@ version_gte() {
     [ "$(printf '%s\n' "$1" "$2" | sort -V | head -1)" = "$2" ]
 }
 
+# Returns 0 (true) if version $1 > version $2 (strictly greater)
+version_gt() {
+    version_gte "$1" "$2" && [ "$1" != "$2" ]
+}
+
 VERSIONS=("4.0" "4.2" "4.4" "5.0" "6.0" "7.0")
 
 for VERSION in "${VERSIONS[@]}"; do
-    CURRENT=$("$SCRIPTS_DIR/detect-db-version.sh" "$DBPATH")
-    log "Current DB version: ${CURRENT}, target step: ${VERSION}"
-
-    # Skip if already at or past this version
-    if [[ "$CURRENT" != "empty" && "$CURRENT" != "unknown" ]] \
-        && version_gte "$CURRENT" "$VERSION"; then
-        log "Skipping step ${VERSION} (already at ${CURRENT})"
+    # Idempotency: only skip if the .mongo_version marker confirms this step was completed.
+    # Never skip based on WiredTiger format alone — the FCV in admin.system.version may not
+    # match the WiredTiger format (e.g. prior session upgraded WT but never set FCV).
+    MARKER=$(cat "$DBPATH/.mongo_version" 2>/dev/null || echo "")
+    if [[ -n "$MARKER" ]] && version_gte "$MARKER" "$VERSION"; then
+        log "Skipping step ${VERSION} (completed, marker=${MARKER})"
         continue
     fi
 
-    # Select the mongod binary for this step
+    # Safety: if the current WiredTiger format is strictly newer than what this step's mongod
+    # binary supports, running it would fail. Abort with a clear message instead.
+    WT_VER=$("$SCRIPTS_DIR/detect-db-version.sh" "$DBPATH")
+    log "Step ${VERSION}: WiredTiger format=${WT_VER}, marker=${MARKER}"
+    if [[ "$WT_VER" != "empty" && "$WT_VER" != "unknown" ]] \
+        && version_gt "$WT_VER" "$VERSION"; then
+        log "ERROR: WiredTiger data (${WT_VER}) is newer than step ${VERSION}."
+        log "ERROR: A previous failed run may have partially upgraded the data."
+        log "ERROR: Restore /data/db from backup before retrying migration."
+        exit 1
+    fi
+
+    # Select the mongod binary and the appropriate mongo client for this step.
+    # mongosh requires wire protocol v8 (MongoDB 4.2+); mongod 4.0 only supports v7.
+    # Use the legacy mongo shell bundled with the 4.0 tarball for the 4.0 step only.
     if [[ "$VERSION" == "7.0" ]]; then
         MONGOD="/usr/bin/mongod"
+        MONGO_CLI="mongosh"
+    elif [[ "$VERSION" == "4.0" ]]; then
+        MONGOD="/usr/local/mongo/4.0/bin/mongod"
+        MONGO_CLI="/usr/local/mongo/4.0/bin/mongo"
     else
         MONGOD="/usr/local/mongo/${VERSION}/bin/mongod"
+        MONGO_CLI="mongosh"
     fi
 
     if [[ ! -x "$MONGOD" ]]; then
         log "ERROR: mongod binary not found or not executable: ${MONGOD}"
+        exit 1
+    fi
+    if [[ ! -x "$MONGO_CLI" ]] && [[ "$MONGO_CLI" != "mongosh" ]]; then
+        log "ERROR: mongo client not found or not executable: ${MONGO_CLI}"
         exit 1
     fi
 
@@ -56,20 +83,20 @@ for VERSION in "${VERSIONS[@]}"; do
         --logappend
 
     log "Waiting for mongod ${VERSION} to be ready..."
-    "$SCRIPTS_DIR/mongo-wait.sh" 127.0.0.1 "$UPGRADE_PORT" 60
+    "$SCRIPTS_DIR/mongo-wait.sh" 127.0.0.1 "$UPGRADE_PORT" 60 "$MONGO_CLI"
 
     log "Setting featureCompatibilityVersion to ${VERSION}"
     if [[ "$VERSION" == "7.0" ]]; then
         # MongoDB 7.0 requires confirm:true for FCV changes
-        mongosh --quiet --host 127.0.0.1 --port "$UPGRADE_PORT" admin \
+        "$MONGO_CLI" --quiet --host 127.0.0.1 --port "$UPGRADE_PORT" admin \
             --eval "db.adminCommand({setFeatureCompatibilityVersion: '7.0', confirm: true})"
     else
-        mongosh --quiet --host 127.0.0.1 --port "$UPGRADE_PORT" admin \
+        "$MONGO_CLI" --quiet --host 127.0.0.1 --port "$UPGRADE_PORT" admin \
             --eval "db.adminCommand({setFeatureCompatibilityVersion: '${VERSION}'})"
     fi
 
     log "Stopping mongod ${VERSION} cleanly"
-    mongosh --quiet --host 127.0.0.1 --port "$UPGRADE_PORT" admin \
+    "$MONGO_CLI" --quiet --host 127.0.0.1 --port "$UPGRADE_PORT" admin \
         --eval "db.adminCommand({shutdown: 1})" || true
 
     # Wait for mongod process to exit
