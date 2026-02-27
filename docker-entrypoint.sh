@@ -25,7 +25,8 @@ exit_handler() {
     done
     # shutdown mongod
     if [ -f ${MONGOLOCK} ]; then
-        mongo localhost:${MONGOPORT} --eval "db.getSiblingDB('admin').shutdownServer()" >/dev/null 2>&1
+        mongosh --quiet --host localhost --port ${MONGOPORT} \
+            --eval "db.adminCommand({shutdown: 1})" admin >/dev/null 2>&1 || true
     fi
     exit ${?};
 }
@@ -36,7 +37,7 @@ trap 'kill ${!}; exit_handler' SIGHUP SIGINT SIGQUIT SIGTERM
 
 
 # vars similar to those found in unifi.init
-MONGOPORT=27117
+MONGOPORT=27017
 
 CODEPATH=${BASEDIR}
 DATALINK=${BASEDIR}/data
@@ -53,7 +54,7 @@ JVM_MAX_HEAP_SIZE=${JVM_MAX_HEAP_SIZE:-1024M}
 #ENABLE_UNIFI=yes
 
 
-MONGOLOCK="${DATAPATH}/db/mongod.lock"
+MONGOLOCK="/data/db/mongod.lock"
 JVM_EXTRA_OPTS="${JVM_EXTRA_OPTS} --add-opens=java.base/java.time=ALL-UNNAMED -Dunifi.datadir=${DATADIR} -Dunifi.logdir=${LOGDIR} -Dunifi.rundir=${RUNDIR}"
 PIDFILE=/var/run/unifi/unifi.pid
 
@@ -182,6 +183,40 @@ if [[ "${@}" == "unifi" ]]; then
             mkdir -p "${dir}"
         fi
     done
+    # ── MongoDB migration ────────────────────────────────────────────────────
+    mkdir -p /data/db
+    log "Detecting MongoDB data version at /data/db"
+    DB_VERSION=$(/usr/local/unifi/scripts/detect-db-version.sh /data/db)
+    log "Detected MongoDB version: ${DB_VERSION}"
+
+    if [[ "$DB_VERSION" != "7.0" && "$DB_VERSION" != "empty" ]]; then
+        BACKUP=/data/db_backup_$(date +%Y%m%d_%H%M%S)
+        log "Backing up /data/db to ${BACKUP}"
+        cp -a /data/db "$BACKUP" || { log "ERROR: Backup failed, aborting"; exit 1; }
+        log "Running MongoDB upgrade from ${DB_VERSION} to 7.0"
+        /usr/local/unifi/scripts/mongo-upgrade.sh /data/db \
+            || { log "ERROR: Migration failed — check logs above"; exit 1; }
+        log "Migration complete. WARNING: Legacy mongo binaries remain in image."
+    else
+        log "No migration needed (version: ${DB_VERSION})"
+    fi
+
+    # Configure UniFi to connect to our externally-managed mongod
+    settings["db.mongo.local"]="false"
+    settings["db.mongo.uri"]="mongodb://localhost:${MONGOPORT}/ace"
+    settings["statdb.mongo.uri"]="mongodb://localhost:${MONGOPORT}/ace_stat"
+    settings["unifi.db.name"]="ace"
+
+    log "Starting mongod 7.0 (production, port ${MONGOPORT})"
+    mongod --dbpath /data/db \
+           --port "${MONGOPORT}" \
+           --bind_ip 127.0.0.1 \
+           --logpath "${LOGDIR}/mongod.log" \
+           --logappend \
+           --fork
+    /usr/local/unifi/scripts/mongo-wait.sh 127.0.0.1 "${MONGOPORT}" 60
+    # ── End MongoDB migration ────────────────────────────────────────────────
+
     for key in "${!settings[@]}"; do
       confSet "$confFile" "$key" "${settings[$key]}"
     done
