@@ -201,6 +201,13 @@ if [[ "${@}" == "unifi" ]]; then
         log "No migration needed (version: ${DB_VERSION})"
     fi
 
+    # Ensure /data/db is owned by the unifi user.
+    # The migration runs mongod as root, leaving all data files root-owned.
+    # UniFi itself also writes into /data/db (e.g. previous_version) and will fail
+    # with AccessDeniedException if the directory is not writable by UNIFI_UID.
+    # Root (mongod) can always write regardless of ownership, so this is safe.
+    chown -R "${UNIFI_UID}:${UNIFI_GID}" /data/db
+
     # Configure UniFi to connect to our externally-managed mongod
     settings["db.mongo.local"]="false"
     settings["db.mongo.uri"]="mongodb://localhost:${MONGOPORT}/ace"
