@@ -28,8 +28,13 @@ fi
 #   WT 11.x → MongoDB 7.0
 TURTLE="$DBPATH/WiredTiger.turtle"
 if [[ -f "$TURTLE" ]]; then
-    WT_MAJOR=$(grep -oE 'WiredTiger version major: [0-9]+' "$TURTLE" | grep -oE '[0-9]+$' | head -1)
-    WT_MINOR=$(grep -oE 'WiredTiger version minor: [0-9]+' "$TURTLE" | grep -oE '[0-9]+$' | head -1)
+    # WiredTiger.turtle is a binary file that embeds a version string like:
+    #   "WiredTiger 3.1.0: (April 23, 2018)"
+    # Use -a to treat the file as text so grep returns the actual match.
+    WT_VERSION=$(grep -aoE 'WiredTiger [0-9]+\.[0-9]+\.[0-9]+' "$TURTLE" | head -1 \
+                 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')
+    WT_MAJOR=$(echo "$WT_VERSION" | cut -d. -f1)
+    WT_MINOR=$(echo "$WT_VERSION" | cut -d. -f2)
     if [[ -n "$WT_MAJOR" ]]; then
         case "$WT_MAJOR" in
             2)  echo "3.6" ;;

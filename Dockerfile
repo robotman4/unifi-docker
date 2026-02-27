@@ -84,12 +84,15 @@ RUN set -eux; \
     cd /tmp/mongodeb; \
     \
     # 4.0 — download binary tarball directly (apt repo signing key expired)
+    # Also extract the legacy mongo shell — required because mongosh needs wire protocol v8 (MongoDB 4.2+),
+    # but mongod 4.0 only supports wire protocol v7.
     mkdir -p /usr/local/mongo/4.0/bin; \
     wget -q "https://fastdl.mongodb.org/linux/mongodb-linux-x86_64-ubuntu1804-4.0.28.tgz" \
         -O /tmp/mongod-4.0.tgz; \
     tar xzf /tmp/mongod-4.0.tgz --strip-components=2 -C /usr/local/mongo/4.0/bin \
-        "mongodb-linux-x86_64-ubuntu1804-4.0.28/bin/mongod"; \
-    chmod +x /usr/local/mongo/4.0/bin/mongod; \
+        "mongodb-linux-x86_64-ubuntu1804-4.0.28/bin/mongod" \
+        "mongodb-linux-x86_64-ubuntu1804-4.0.28/bin/mongo"; \
+    chmod +x /usr/local/mongo/4.0/bin/mongod /usr/local/mongo/4.0/bin/mongo; \
     rm /tmp/mongod-4.0.tgz; \
     \
     # 4.2 — download binary tarball directly (focal repo does not carry 4.2.25)
