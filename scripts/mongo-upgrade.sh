@@ -22,6 +22,53 @@ version_gt() {
     version_gte "$1" "$2" && [ "$1" != "$2" ]
 }
 
+# Download mongod binary (and legacy mongo shell for 4.0) for a given version.
+# No-op if the binary already exists at /usr/local/mongo/<ver>/bin/mongod.
+# On failure: logs error and exits 1.
+download_mongod() {
+    local ver="$1"
+    local dest="/usr/local/mongo/${ver}/bin"
+    local mongod_bin="${dest}/mongod"
+
+    # Already present — skip download (e.g. pre-installed via volume mount)
+    if [[ -x "$mongod_bin" ]]; then
+        log "mongod ${ver} binary already present, skipping download"
+        return 0
+    fi
+
+    local name url tarball
+    case "$ver" in
+        4.0) name="mongodb-linux-x86_64-ubuntu1804-4.0.28" ;;
+        4.2) name="mongodb-linux-x86_64-ubuntu1804-4.2.25" ;;
+        4.4) name="mongodb-linux-x86_64-ubuntu2004-4.4.29" ;;
+        5.0) name="mongodb-linux-x86_64-ubuntu2004-5.0.31" ;;
+        6.0) name="mongodb-linux-x86_64-ubuntu2204-6.0.20" ;;
+        *)   log "ERROR: No download URL configured for mongod ${ver}"; exit 1 ;;
+    esac
+    url="https://fastdl.mongodb.org/linux/${name}.tgz"
+    tarball="/tmp/mongod-${ver}.tgz"
+
+    log "Downloading mongod ${ver} from ${url}..."
+    mkdir -p "$dest"
+    if ! wget -q "$url" -O "$tarball"; then
+        log "ERROR: Failed to download mongod ${ver} from ${url}"
+        rm -f "$tarball"
+        exit 1
+    fi
+
+    tar xzf "$tarball" --strip-components=2 -C "$dest" "${name}/bin/mongod"
+    chmod +x "$mongod_bin"
+
+    # 4.0 also needs the legacy mongo shell — mongosh requires wire protocol v8 (MongoDB 4.2+)
+    if [[ "$ver" == "4.0" ]]; then
+        tar xzf "$tarball" --strip-components=2 -C "$dest" "${name}/bin/mongo"
+        chmod +x "${dest}/mongo"
+    fi
+
+    rm -f "$tarball"
+    log "mongod ${ver} ready at ${mongod_bin}"
+}
+
 VERSIONS=("4.0" "4.2" "4.4" "5.0" "6.0" "7.0")
 
 for VERSION in "${VERSIONS[@]}"; do
@@ -32,6 +79,11 @@ for VERSION in "${VERSIONS[@]}"; do
     if [[ -n "$MARKER" ]] && version_gte "$MARKER" "$VERSION"; then
         log "Skipping step ${VERSION} (completed, marker=${MARKER})"
         continue
+    fi
+
+    # Download binary on-demand (no-op if already present or version is 7.0)
+    if [[ "$VERSION" != "7.0" ]]; then
+        download_mongod "$VERSION"
     fi
 
     # Safety: if the current WiredTiger format is strictly newer than what this step's mongod
@@ -117,6 +169,12 @@ for VERSION in "${VERSIONS[@]}"; do
     # Write marker so the next invocation knows where we are
     echo "$VERSION" > "$DBPATH/.mongo_version"
     log "Successfully upgraded to MongoDB ${VERSION}"
+
+    # Clean up migration binary immediately — it is never needed again
+    if [[ "$VERSION" != "7.0" ]]; then
+        rm -rf "/usr/local/mongo/${VERSION}"
+        log "Cleaned up mongod ${VERSION} binaries"
+    fi
 done
 
 log "Migration to MongoDB 7.0 complete"

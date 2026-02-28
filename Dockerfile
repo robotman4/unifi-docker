@@ -54,83 +54,24 @@ RUN chmod +x /usr/local/bin/docker-entrypoint.sh \
  && chmod +x /usr/local/bin/docker-build.sh \
  && chmod -R +x /usr/local/docker/pre_build
 
-# Install libssl1.1 (required by mongod 4.x and 5.0 binaries), set up MongoDB repos,
-# download/extract migration mongod binaries (4.0–6.0), install MongoDB 7.0 + mongosh system-wide.
-# All in one layer to keep the cache-friendly and minimise intermediate layer overhead.
+# Install libssl1.1 (required at runtime by legacy mongod 4.x/5.0 binaries downloaded during migration),
+# set up MongoDB 7.0 apt repo, and install MongoDB 7.0 + mongosh system-wide.
+# Legacy mongod binaries (4.0–6.0) are downloaded on-demand during migration, not bundled in the image.
 RUN set -eux; \
     apt-get update; \
     apt-get install -y wget gnupg ca-certificates curl; \
     \
-    # libssl1.1 — required for mongod 4.x / 5.0 binaries on Ubuntu 24.04
+    # libssl1.1 — required at runtime to run legacy mongod 4.x / 5.0 binaries during migration
     wget -q http://archive.ubuntu.com/ubuntu/pool/main/o/openssl/libssl1.1_1.1.1f-1ubuntu2_amd64.deb; \
     dpkg -i libssl1.1_1.1.1f-1ubuntu2_amd64.deb; \
     rm libssl1.1_1.1.1f-1ubuntu2_amd64.deb; \
     \
-    # MongoDB signing keys (4.0–6.0 binaries via tarball; only 4.4 + 7.0 apt repos needed)
-    curl -fsSL https://pgp.mongodb.com/server-4.4.asc \
-        | gpg --dearmor -o /usr/share/keyrings/mongodb-server-4.4.gpg; \
+    # MongoDB 7.0 signing key and apt repository (production binary)
     curl -fsSL https://pgp.mongodb.com/server-7.0.asc \
         | gpg --dearmor -o /usr/share/keyrings/mongodb-server-7.0.gpg; \
-    \
-    # MongoDB apt repositories (only 4.4 focal for dpkg-deb extract, 7.0 jammy for production install)
-    echo "deb [ arch=amd64 signed-by=/usr/share/keyrings/mongodb-server-4.4.gpg ] https://repo.mongodb.org/apt/ubuntu focal/mongodb-org/4.4 multiverse" \
-        > /etc/apt/sources.list.d/mongodb-org-4.4.list; \
     echo "deb [ arch=amd64 signed-by=/usr/share/keyrings/mongodb-server-7.0.gpg ] https://repo.mongodb.org/apt/ubuntu jammy/mongodb-org/7.0 multiverse" \
         > /etc/apt/sources.list.d/mongodb-org-7.0.list; \
     apt-get update; \
-    \
-    # Download and extract mongod binaries for migration steps (no deps installed)
-    mkdir -p /tmp/mongodeb; \
-    cd /tmp/mongodeb; \
-    \
-    # 4.0 — download binary tarball directly (apt repo signing key expired)
-    # Also extract the legacy mongo shell — required because mongosh needs wire protocol v8 (MongoDB 4.2+),
-    # but mongod 4.0 only supports wire protocol v7.
-    mkdir -p /usr/local/mongo/4.0/bin; \
-    wget -q "https://fastdl.mongodb.org/linux/mongodb-linux-x86_64-ubuntu1804-4.0.28.tgz" \
-        -O /tmp/mongod-4.0.tgz; \
-    tar xzf /tmp/mongod-4.0.tgz --strip-components=2 -C /usr/local/mongo/4.0/bin \
-        "mongodb-linux-x86_64-ubuntu1804-4.0.28/bin/mongod" \
-        "mongodb-linux-x86_64-ubuntu1804-4.0.28/bin/mongo"; \
-    chmod +x /usr/local/mongo/4.0/bin/mongod /usr/local/mongo/4.0/bin/mongo; \
-    rm /tmp/mongod-4.0.tgz; \
-    \
-    # 4.2 — download binary tarball directly (focal repo does not carry 4.2.25)
-    mkdir -p /usr/local/mongo/4.2/bin; \
-    wget -q "https://fastdl.mongodb.org/linux/mongodb-linux-x86_64-ubuntu1804-4.2.25.tgz" \
-        -O /tmp/mongod-4.2.tgz; \
-    tar xzf /tmp/mongod-4.2.tgz --strip-components=2 -C /usr/local/mongo/4.2/bin \
-        "mongodb-linux-x86_64-ubuntu1804-4.2.25/bin/mongod"; \
-    chmod +x /usr/local/mongo/4.2/bin/mongod; \
-    rm /tmp/mongod-4.2.tgz; \
-    \
-    apt-get download mongodb-org-server=4.4.30; \
-    mkdir -p /usr/local/mongo/4.4/bin; \
-    dpkg-deb --extract mongodb-org-server_4.4.30_amd64.deb extract-4.4; \
-    cp extract-4.4/usr/bin/mongod /usr/local/mongo/4.4/bin/mongod; \
-    chmod +x /usr/local/mongo/4.4/bin/mongod; \
-    rm -rf extract-4.4 mongodb-org-server_4.4.30_amd64.deb; \
-    \
-    # 5.0 — download binary tarball directly (jammy repo does not carry 5.0.31)
-    mkdir -p /usr/local/mongo/5.0/bin; \
-    wget -q "https://fastdl.mongodb.org/linux/mongodb-linux-x86_64-ubuntu2004-5.0.31.tgz" \
-        -O /tmp/mongod-5.0.tgz; \
-    tar xzf /tmp/mongod-5.0.tgz --strip-components=2 -C /usr/local/mongo/5.0/bin \
-        "mongodb-linux-x86_64-ubuntu2004-5.0.31/bin/mongod"; \
-    chmod +x /usr/local/mongo/5.0/bin/mongod; \
-    rm /tmp/mongod-5.0.tgz; \
-    \
-    # 6.0 — download binary tarball directly (jammy repo does not carry 6.0.20)
-    mkdir -p /usr/local/mongo/6.0/bin; \
-    wget -q "https://fastdl.mongodb.org/linux/mongodb-linux-x86_64-ubuntu2204-6.0.20.tgz" \
-        -O /tmp/mongod-6.0.tgz; \
-    tar xzf /tmp/mongod-6.0.tgz --strip-components=2 -C /usr/local/mongo/6.0/bin \
-        "mongodb-linux-x86_64-ubuntu2204-6.0.20/bin/mongod"; \
-    chmod +x /usr/local/mongo/6.0/bin/mongod; \
-    rm /tmp/mongod-6.0.tgz; \
-    \
-    cd /; \
-    rm -rf /tmp/mongodeb; \
     \
     # MongoDB 7.0 — system-wide production binary
     apt-get install -y mongodb-org-server; \
