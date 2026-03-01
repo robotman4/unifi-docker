@@ -183,6 +183,25 @@ if [[ "${@}" == "unifi" ]]; then
             mkdir -p "${dir}"
         fi
     done
+    # ── Download mongosh ─────────────────────────────────────────────────────
+    # mongosh is not bundled in the image (saves ~250 MB). Download on startup.
+    MONGOSH_VERSION="2.3.2"
+    if ! command -v mongosh &>/dev/null; then
+        log "Downloading mongosh ${MONGOSH_VERSION} (not bundled in image)..."
+        MONGOSH_URL="https://downloads.mongodb.com/compass/mongosh-${MONGOSH_VERSION}-linux-x64.tgz"
+        MONGOSH_TARBALL="/tmp/mongosh.tgz"
+        if ! wget -q "$MONGOSH_URL" -O "$MONGOSH_TARBALL"; then
+            log "ERROR: Failed to download mongosh ${MONGOSH_VERSION} from ${MONGOSH_URL}"
+            exit 1
+        fi
+        mkdir -p /tmp/mongosh-extract
+        tar xzf "$MONGOSH_TARBALL" -C /tmp/mongosh-extract --strip-components=1
+        install -m 755 /tmp/mongosh-extract/bin/mongosh /usr/local/bin/mongosh
+        rm -rf /tmp/mongosh-extract "$MONGOSH_TARBALL"
+        log "mongosh ${MONGOSH_VERSION} ready"
+    fi
+    # ── End download mongosh ─────────────────────────────────────────────────
+
     # ── MongoDB migration ────────────────────────────────────────────────────
     mkdir -p /data/db
     log "Detecting MongoDB data version at /data/db"
