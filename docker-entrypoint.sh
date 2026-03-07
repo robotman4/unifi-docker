@@ -54,7 +54,7 @@ JVM_MAX_HEAP_SIZE=${JVM_MAX_HEAP_SIZE:-1024M}
 #ENABLE_UNIFI=yes
 
 
-MONGOLOCK="/data/db/mongod.lock"
+MONGOLOCK="/unifi/data/db/mongod.lock"
 JVM_EXTRA_OPTS="${JVM_EXTRA_OPTS} --add-opens=java.base/java.time=ALL-UNNAMED -Dunifi.datadir=${DATADIR} -Dunifi.logdir=${LOGDIR} -Dunifi.rundir=${RUNDIR}"
 PIDFILE=/var/run/unifi/unifi.pid
 
@@ -183,49 +183,30 @@ if [[ "${@}" == "unifi" ]]; then
             mkdir -p "${dir}"
         fi
     done
-    # ── Download mongosh ─────────────────────────────────────────────────────
-    # mongosh is not bundled in the image (saves ~250 MB). Download on startup.
-    MONGOSH_VERSION="2.3.2"
-    if ! command -v mongosh &>/dev/null; then
-        log "Downloading mongosh ${MONGOSH_VERSION} (not bundled in image)..."
-        MONGOSH_URL="https://downloads.mongodb.com/compass/mongosh-${MONGOSH_VERSION}-linux-x64.tgz"
-        MONGOSH_TARBALL="/tmp/mongosh.tgz"
-        if ! wget -q "$MONGOSH_URL" -O "$MONGOSH_TARBALL"; then
-            log "ERROR: Failed to download mongosh ${MONGOSH_VERSION} from ${MONGOSH_URL}"
-            exit 1
-        fi
-        mkdir -p /tmp/mongosh-extract
-        tar xzf "$MONGOSH_TARBALL" -C /tmp/mongosh-extract --strip-components=1
-        install -m 755 /tmp/mongosh-extract/bin/mongosh /usr/local/bin/mongosh
-        rm -rf /tmp/mongosh-extract "$MONGOSH_TARBALL"
-        log "mongosh ${MONGOSH_VERSION} ready"
-    fi
-    # ── End download mongosh ─────────────────────────────────────────────────
-
     # ── MongoDB migration ────────────────────────────────────────────────────
-    mkdir -p /data/db
-    log "Detecting MongoDB data version at /data/db"
-    DB_VERSION=$(/usr/local/unifi/scripts/detect-db-version.sh /data/db)
+    mkdir -p /unifi/data/db
+    log "Detecting MongoDB data version at /unifi/data/db"
+    DB_VERSION=$(/usr/local/unifi/scripts/detect-db-version.sh /unifi/data/db)
     log "Detected MongoDB version: ${DB_VERSION}"
 
     if [[ "$DB_VERSION" != "7.0" && "$DB_VERSION" != "empty" ]]; then
-        BACKUP=/data/db_backup_$(date +%Y%m%d_%H%M%S)
-        log "Backing up /data/db to ${BACKUP}"
-        cp -a /data/db "$BACKUP" || { log "ERROR: Backup failed, aborting"; exit 1; }
+        BACKUP=/unifi/data/db_backup_$(date +%Y%m%d_%H%M%S)
+        log "Backing up /unifi/data/db to ${BACKUP}"
+        cp -a /unifi/data/db "$BACKUP" || { log "ERROR: Backup failed, aborting"; exit 1; }
         log "Running MongoDB upgrade from ${DB_VERSION} to 7.0"
-        /usr/local/unifi/scripts/mongo-upgrade.sh /data/db \
+        /usr/local/unifi/scripts/mongo-upgrade.sh /unifi/data/db \
             || { log "ERROR: Migration failed — check logs above"; exit 1; }
         log "Migration complete. WARNING: Legacy mongo binaries remain in image."
     else
         log "No migration needed (version: ${DB_VERSION})"
     fi
 
-    # Ensure /data/db is owned by the unifi user.
+    # Ensure /unifi/data/db is owned by the unifi user.
     # The migration runs mongod as root, leaving all data files root-owned.
-    # UniFi itself also writes into /data/db (e.g. previous_version) and will fail
+    # UniFi itself also writes into /unifi/data/db (e.g. previous_version) and will fail
     # with AccessDeniedException if the directory is not writable by UNIFI_UID.
     # Root (mongod) can always write regardless of ownership, so this is safe.
-    chown -R "${UNIFI_UID}:${UNIFI_GID}" /data/db
+    chown -R "${UNIFI_UID}:${UNIFI_GID}" /unifi/data/db
 
     # Configure UniFi to connect to our externally-managed mongod
     settings["db.mongo.local"]="false"
@@ -234,13 +215,15 @@ if [[ "${@}" == "unifi" ]]; then
     settings["unifi.db.name"]="ace"
 
     log "Starting mongod 7.0 (production, port ${MONGOPORT})"
-    mongod --dbpath /data/db \
+    mongod --dbpath /unifi/data/db \
            --port "${MONGOPORT}" \
            --bind_ip 127.0.0.1 \
            --logpath "${LOGDIR}/mongod.log" \
            --logappend \
-           --fork
-    /usr/local/unifi/scripts/mongo-wait.sh 127.0.0.1 "${MONGOPORT}" 60
+           --fork \
+        || { log "ERROR: mongod 7.0 failed to start — aborting"; exit 1; }
+    /usr/local/unifi/scripts/mongo-wait.sh 127.0.0.1 "${MONGOPORT}" 60 \
+        || { log "ERROR: mongod 7.0 failed to become ready — aborting"; exit 1; }
     # ── End MongoDB migration ────────────────────────────────────────────────
 
     for key in "${!settings[@]}"; do
