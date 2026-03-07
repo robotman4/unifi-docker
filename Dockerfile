@@ -55,8 +55,8 @@ RUN chmod +x /usr/local/bin/docker-entrypoint.sh \
  && chmod -R +x /usr/local/docker/pre_build
 
 # Install libssl1.1 (required at runtime by legacy mongod 4.x/5.0 binaries downloaded during migration),
-# set up MongoDB 7.0 apt repo, and install MongoDB 7.0 server.
-# Legacy mongod binaries (4.0–6.0) and mongosh are downloaded on-demand at runtime, not bundled in the image.
+# set up MongoDB 7.0 apt repo, and install MongoDB 7.0 server and mongosh.
+# Legacy mongod binaries (4.0–6.0) are downloaded on-demand at runtime, not bundled in the image.
 RUN set -eux; \
     apt-get update; \
     apt-get install -y wget gnupg ca-certificates curl; \
@@ -75,6 +75,9 @@ RUN set -eux; \
     \
     # MongoDB 7.0 — system-wide production binary
     apt-get install -y mongodb-org-server; \
+    \
+    # mongosh — needed at every startup for mongod ping and clean shutdown
+    apt-get install -y mongodb-mongosh; \
     \
     apt-get clean && rm -rf /var/lib/apt/lists/*
 
