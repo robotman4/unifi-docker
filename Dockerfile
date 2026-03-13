@@ -81,6 +81,32 @@ RUN set -eux; \
     \
     apt-get clean && rm -rf /var/lib/apt/lists/*
 
+# Bundle legacy mongod binaries for fully offline migration (3.6→4.0→4.2→4.4→5.0→6.0).
+# mongo-upgrade.sh skips download automatically when the binary is already present.
+# 4.0 also needs the legacy mongo shell (mongosh requires wire protocol v8 = MongoDB 4.2+).
+RUN set -eux; \
+    for entry in \
+        "4.0:mongodb-linux-x86_64-ubuntu1804-4.0.28" \
+        "4.2:mongodb-linux-x86_64-ubuntu1804-4.2.25" \
+        "4.4:mongodb-linux-x86_64-ubuntu2004-4.4.29" \
+        "5.0:mongodb-linux-x86_64-ubuntu2004-5.0.31" \
+        "6.0:mongodb-linux-x86_64-ubuntu2204-6.0.20" \
+    ; do \
+        ver="${entry%%:*}"; \
+        name="${entry##*:}"; \
+        url="https://fastdl.mongodb.org/linux/${name}.tgz"; \
+        dest="/usr/local/mongo/${ver}/bin"; \
+        mkdir -p "$dest"; \
+        wget -q "$url" -O /tmp/mongod-${ver}.tgz; \
+        tar xzf /tmp/mongod-${ver}.tgz --strip-components=2 -C "$dest" "${name}/bin/mongod"; \
+        chmod +x "${dest}/mongod"; \
+        if [ "$ver" = "4.0" ]; then \
+            tar xzf /tmp/mongod-${ver}.tgz --strip-components=2 -C "$dest" "${name}/bin/mongo"; \
+            chmod +x "${dest}/mongo"; \
+        fi; \
+        rm -f /tmp/mongod-${ver}.tgz; \
+    done
+
 # Push installing openjdk-8-jre first, so that the unifi package doesn't pull in openjdk-7-jre as a dependency? Else uncomment and just go with openjdk-7.
 RUN set -ex \
  && mkdir -p /usr/share/man/man1/ \
